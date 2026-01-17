@@ -13,6 +13,8 @@ from .constants import DOMAIN
 from .proto import convert_envelope_to_json, try_encrypt_envelope
 
 import logging
+import time
+from collections import OrderedDict
 from datetime import datetime
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,6 +59,11 @@ class Coordinator(DataUpdateCoordinator):
         self._platform = platform
         self._entry = entry
         self._entry_id = entry.entry_id
+        # For deduplication: OrderedDict of {(from_node, packet_id): timestamp}
+        # Messages are considered duplicates within a 60-second window
+        self._seen_messages = OrderedDict()
+        self._dedup_window_seconds = 60
+        self._channel_keys_cache = None  # Parsed channel keys
 
 
     async def _async_update(self):
@@ -69,15 +76,56 @@ class Coordinator(DataUpdateCoordinator):
         })
         await self._platform.async_put_data(self._entry_id, self.data)
 
+    def _parse_channel_keys(self) -> dict:
+        """Parse channel_keys config into a dict mapping channel names to keys."""
+        if self._channel_keys_cache is not None:
+            return self._channel_keys_cache
+
+        self._channel_keys_cache = {}
+        channel_keys_str = self._config.get("channel_keys", "")
+        if channel_keys_str:
+            for line in channel_keys_str.strip().split("\n"):
+                line = line.strip()
+                if ":" in line:
+                    channel, key = line.split(":", 1)
+                    self._channel_keys_cache[channel.strip()] = key.strip()
+
+        return self._channel_keys_cache
+
+    def _get_key_for_topic(self, topic: str) -> str:
+        """Get encryption key for the channel in this topic."""
+        if self._config.get("subscription_mode") == "wildcard":
+            # Extract channel from topic (second-to-last segment)
+            # Topic format: {root_topic}/{channel}/{receiver}
+            parts = topic.split("/")
+            if len(parts) >= 2:
+                channel = parts[-2]
+                channel_keys = self._parse_channel_keys()
+                if channel in channel_keys:
+                    _LOGGER.debug(f"_get_key_for_topic: using channel key for {channel}")
+                    return channel_keys[channel]
+        # Fall back to default key
+        return self._config.get("key", "AQ==")
+
     async def async_load(self):
         self._config = self._entry.as_dict()["options"]
         self._node_id = self._config["id"]
         self._id = int(self._node_id[1:], 16)
-        _LOGGER.debug(f"async_load: {self._config}, {self.data}, {self._node_id}, {self._id}")
-        self._data_subs = await mqtt_client.async_subscribe(self.hass, self._config.get("pb_topic"), self._async_on_pb_message, encoding=None)
+        self._channel_keys_cache = None  # Reset cache on reload
+
+        # Determine subscription topic based on mode
+        mode = self._config.get("subscription_mode", "specific")
+        if mode == "wildcard":
+            root_topic = self._config.get("root_topic", "")
+            topic = f"{root_topic}/#"
+        else:
+            topic = self._config.get("pb_topic")
+
+        _LOGGER.debug(f"async_load: {self._config}, {self.data}, {self._node_id}, {self._id}, topic={topic}")
+        self._data_subs = await mqtt_client.async_subscribe(self.hass, topic, self._async_on_pb_message, encoding=None)
         self._stat_subs = None
-        if topic := self._config.get("stat_topic"):
-            self._stat_subs = await mqtt_client.async_subscribe(self.hass, topic, self._async_on_stat_message)
+        if stat_topic := self._config.get("stat_topic"):
+            self._stat_subs = await mqtt_client.async_subscribe(self.hass, stat_topic, self._async_on_stat_message)
 
     async def async_unload(self):
         _LOGGER.debug(f"async_unload:")
@@ -112,8 +160,34 @@ class Coordinator(DataUpdateCoordinator):
             env = mqtt_pb2.ServiceEnvelope()
             env.ParseFromString(message.payload)
             _LOGGER.debug(f"_async_on_pb_message(): parsed {env}")
+
+            # Deduplication: check if we've already seen this message recently
+            packet_id = env.packet.id
+            from_node = getattr(env.packet, "from")
+            msg_key = (from_node, packet_id)
+            now = time.monotonic()
+
+            if msg_key in self._seen_messages:
+                _LOGGER.debug(f"_async_on_pb_message: skipping duplicate message {msg_key}")
+                return
+
+            # Add to seen messages with current timestamp
+            self._seen_messages[msg_key] = now
+
+            # Prune expired entries (older than dedup window)
+            # OrderedDict maintains insertion order, so we can stop once we hit a recent one
+            cutoff = now - self._dedup_window_seconds
+            while self._seen_messages:
+                oldest_key, oldest_time = next(iter(self._seen_messages.items()))
+                if oldest_time < cutoff:
+                    del self._seen_messages[oldest_key]
+                else:
+                    break
+
             if env.packet.HasField("encrypted"):
-                try_encrypt_envelope(env, self._config.get("key", "AQ=="))
+                # Get the appropriate key for this topic/channel
+                key = self._get_key_for_topic(message.topic)
+                try_encrypt_envelope(env, key)
                 _LOGGER.debug(f"_async_on_pb_message(): decrypted {env.packet}")
             obj = convert_envelope_to_json(env)
             _LOGGER.debug(f"_async_on_pb_message(): JSON {obj}")

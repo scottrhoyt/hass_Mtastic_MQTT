@@ -12,10 +12,16 @@ _LOGGER = logging.getLogger(__name__)
 async def _validate(hass, input: dict) -> (str | None, dict):
     if "id" in input and (len(input["id"]) != 9 or input["id"][0] != "!"):
         return "invalid_id", None
-    # if not input.get("pb_topic") and not input.get("json_topic"):
-    #     return "no_topic", None
-    # if input.get("pb_topic") and input.get("json_topic"):
-    #     return "no_topic", None
+
+    # Validate topic configuration based on subscription mode
+    mode = input.get("subscription_mode", "specific")
+    if mode == "wildcard":
+        if not input.get("root_topic"):
+            return "no_root_topic", None
+    else:
+        if not input.get("pb_topic"):
+            return "no_pb_topic", None
+
     return None, input
 
 def _create_schema(hass, input: dict, flow: str = "config"):
@@ -28,11 +34,29 @@ def _create_schema(hass, input: dict, flow: str = "config"):
         vol.Required("id", description={"suggested_value": input.get("id", "")}): selector({
             "text": {}
         }),
-        vol.Required("pb_topic", description={"suggested_value": input.get("pb_topic", "")}): selector({
+        vol.Required("subscription_mode", default=input.get("subscription_mode", "specific")): selector({
+            "select": {
+                "options": [
+                    {"value": "specific", "label": "Specific Topic"},
+                    {"value": "wildcard", "label": "All Channels/Receivers"},
+                ],
+            }
+        }),
+        # Specific mode: full topic path
+        vol.Optional("pb_topic", description={"suggested_value": input.get("pb_topic", "")}): selector({
             "text": {}
         }),
+        # Wildcard mode: root topic (we append /#)
+        vol.Optional("root_topic", description={"suggested_value": input.get("root_topic", "")}): selector({
+            "text": {}
+        }),
+        # Single key for specific mode, or default key for wildcard mode
         vol.Optional("key", description={"suggested_value": input.get("key", "")}): selector({
             "text": { "type": "password" }
+        }),
+        # Per-channel keys for wildcard mode (format: channel:key, one per line)
+        vol.Optional("channel_keys", description={"suggested_value": input.get("channel_keys", "")}): selector({
+            "text": { "multiline": True }
         }),
         vol.Optional("stat_topic", description={"suggested_value": input.get("stat_topic", "")}): selector({
             "text": {}

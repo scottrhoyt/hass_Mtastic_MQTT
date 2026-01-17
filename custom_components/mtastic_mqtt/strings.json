@@ -6,14 +6,19 @@
         "data": {
           "title": "Title",
           "id": "Node ID (!aabbccdd)",
-          "pb_topic": "Protobuf MQTT Topic (example: msh/2/e/LongFast/!aabbccdd)",
+          "subscription_mode": "Subscription Mode",
+          "pb_topic": "Protobuf MQTT Topic (for Specific Topic mode, example: msh/2/e/LongFast/!aabbccdd)",
+          "root_topic": "Root MQTT Topic (for All Channels mode, example: msh/2/e)",
           "stat_topic": "Stat MQTT Topic (example: msh/2/stat/!aabbccdd)",
-          "key": "Channel encryption key (Base64 encoded)"
+          "key": "Default encryption key (Base64 encoded)",
+          "channel_keys": "Per-channel encryption keys (one per line: channel:key)"
         }
       }
     },
     "error": {
-      "invalid_id": "Invalid Node ID value"
+      "invalid_id": "Invalid Node ID value",
+      "no_pb_topic": "Protobuf Topic is required for Specific Topic mode",
+      "no_root_topic": "Root Topic is required for All Channels mode"
     }
   },
   "options": {
@@ -21,14 +26,20 @@
       "init": {
         "description": "Configure Node",
         "data": {
-          "pb_topic": "Protobuf MQTT Topic (example: msh/2/e/LongFast/!aabbccdd)",
+          "id": "Node ID (!aabbccdd)",
+          "subscription_mode": "Subscription Mode",
+          "pb_topic": "Protobuf MQTT Topic (for Specific Topic mode, example: msh/2/e/LongFast/!aabbccdd)",
+          "root_topic": "Root MQTT Topic (for All Channels mode, example: msh/2/e)",
           "stat_topic": "Stat MQTT Topic (example: msh/2/stat/!aabbccdd)",
-          "key": "Channel encryption key (Base64 encoded)"
+          "key": "Default encryption key (Base64 encoded)",
+          "channel_keys": "Per-channel encryption keys (one per line: channel:key)"
         }
       }
     },
     "error": {
-      "invalid_id": "Invalid Node ID value"
+      "invalid_id": "Invalid Node ID value",
+      "no_pb_topic": "Protobuf Topic is required for Specific Topic mode",
+      "no_root_topic": "Root Topic is required for All Channels mode"
     }
   }
 }
